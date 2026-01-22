@@ -307,10 +307,21 @@ def make_user_input_form(X: pd.DataFrame, cat_cols, num_cols) -> pd.DataFrame:
 
 
 # -----------------------------
-# 메인 화면
+# 메인 헤더: 작은 아이콘 + 제목
 # -----------------------------
-st.image("heart.png", use_container_width=True)
-st.title("심근경색 위험도 탐색기")
+header_col1, header_col2 = st.columns([1, 10])
+
+with header_col1:
+    st.image("heart.png", width=80)  # 아이콘 크기 조절 (60~100 권장)
+
+with header_col2:
+    st.markdown(
+        """
+        <h1 style="margin-bottom: 0;">심근경색 위험도 탐색기</h1>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 CSV_PATH = "Heart Attack Data Set.csv"
 df = load_data(CSV_PATH)
