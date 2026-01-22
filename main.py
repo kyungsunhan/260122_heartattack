@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 import shap
-import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
@@ -25,64 +24,50 @@ st.set_page_config(
     layout="wide",
 )
 
-
-# -----------------------------
-# 심장 일러스트 (내장 SVG)
-# -----------------------------
-HEART_SVG = """
-<svg width="520" height="140" viewBox="0 0 520 140" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="g" x1="0" x2="1">
-      <stop offset="0" stop-color="#ff5a5f"/>
-      <stop offset="1" stop-color="#d7263d"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="520" height="140" rx="18" fill="#f7f7f9"/>
-  <path d="M150 55
-           C150 30, 180 20, 200 35
-           C220 15, 255 25, 255 55
-           C255 85, 220 100, 200 118
-           C180 100, 150 85, 150 55 Z"
-        fill="url(#g)" opacity="0.95"/>
-  <path d="M80 75 H118 L130 52 L145 98 L160 70 H210"
-        fill="none" stroke="#111827" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
-  <text x="260" y="58" font-family="Arial" font-size="22" fill="#111827" font-weight="700">
-    심근경색 위험도 탐색기
-  </text>
-  <text x="260" y="86" font-family="Arial" font-size="14" fill="#374151">
-    데이터 기반 예측 점수 · 변수 영향 · 개인별 설명(SHAP)
-  </text>
-</svg>
-"""
-
-
 # -----------------------------
 # 한글 변수명 매핑
 # -----------------------------
-# (본 데이터셋은 UCI heart 계열 컬럼을 가정합니다)
 KOR_COL = {
     "age": "나이",
     "sex": "성별",
-    "cp": "흉통 유형(cp)",
-    "trestbps": "안정시 혈압(trestbps)",
-    "chol": "혈청 콜레스테롤(chol)",
-    "fbs": "공복혈당>120 여부(fbs)",
-    "restecg": "휴식 심전도(restecg)",
-    "thalach": "최대 심박수(thalach)",
-    "exang": "운동유발 협심증(exang)",
-    "oldpeak": "운동 후 ST 저하(oldpeak)",
-    "slope": "ST 기울기(slope)",
-    "ca": "주요 혈관수(ca)",
-    "thal": "Thal 검사(thal)",
-    "target": "심근경색/심장질환(타깃)",
+    "cp": "흉통 유형",
+    "trestbps": "안정시 혈압",
+    "chol": "혈청 콜레스테롤",
+    "fbs": "공복혈당 >120 여부",
+    "restecg": "휴식 심전도",
+    "thalach": "최대 심박수",
+    "exang": "운동유발 협심증",
+    "oldpeak": "운동 후 ST 저하",
+    "slope": "ST 기울기",
+    "ca": "조영된 주요 혈관 수",
+    "thal": "Thal 검사",
+    "target": "타깃(발생=1)",
 }
 
-# 범주형 컬럼 설명(옵션)
-KOR_CAT_DESC = {
-    "sex": "0=여성, 1=남성(데이터 정의에 따름)",
-    "fbs": "1=공복혈당>120mg/dL, 0=그 외",
-    "exang": "1=있음, 0=없음",
+# -----------------------------
+# 범주형 코드 -> 한글 의미(표준 UCI 정의 기반; 데이터셋에 따라 일부 수정 가능)
+# -----------------------------
+CAT_VALUE_LABELS = {
+    "sex": {0: "여성(0)", 1: "남성(1)"},
+    "cp": {
+        0: "전형적 협심증(0)",
+        1: "비전형적 협심증(1)",
+        2: "비협심증성 흉통(2)",
+        3: "무증상(3)",
+    },
+    "fbs": {0: "아니오(0): ≤120 mg/dL", 1: "예(1): >120 mg/dL"},
+    "restecg": {0: "정상(0)", 1: "ST-T 이상(1)", 2: "좌심실비대 가능(2)"},
+    "exang": {0: "없음(0)", 1: "있음(1)"},
+    "slope": {0: "상승형(0)", 1: "평탄형(1)", 2: "하강형(2)"},
+    "ca": {0: "0개(0)", 1: "1개(1)", 2: "2개(2)", 3: "3개(3)", 4: "미상/코드값(4)"},
+    "thal": {0: "미상(0)", 1: "정상(1)", 2: "고정 결손(2)", 3: "가역 결손(3)"},
 }
+
+# -----------------------------
+# 일반인이 입력/해석하기 어려운 변수 목록(경고 강조용)
+# -----------------------------
+HARD_VARS = ["oldpeak", "slope", "ca", "thal", "restecg"]
+HARD_VARS_KOR = ", ".join([KOR_COL[v] for v in HARD_VARS])
 
 
 # -----------------------------
@@ -90,8 +75,7 @@ KOR_CAT_DESC = {
 # -----------------------------
 @st.cache_data
 def load_data(csv_path: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
-    return df
+    return pd.read_csv(csv_path)
 
 
 # -----------------------------
@@ -106,14 +90,8 @@ def build_pipeline(X: pd.DataFrame, cat_cols, num_cols) -> Pipeline:
         remainder="drop",
         sparse_threshold=0.3,
     )
-
-    model = LogisticRegression(
-        max_iter=2000,
-        solver="lbfgs",
-    )
-
-    pipe = Pipeline(steps=[("preprocess", preprocessor), ("model", model)])
-    return pipe
+    model = LogisticRegression(max_iter=2000, solver="lbfgs")
+    return Pipeline(steps=[("preprocess", preprocessor), ("model", model)])
 
 
 def percentile_rank(values: np.ndarray, x: float) -> float:
@@ -144,26 +122,36 @@ def plot_probability_gauge(prob: float) -> go.Figure:
 
 def _pretty_kor_feature_name(raw_name: str) -> str:
     """
-    preprocess.get_feature_names_out() 결과를 한글로 보기 좋게 변환
+    preprocess.get_feature_names_out() 결과를 한글로 변환
     예: 'num__age' -> '나이'
-        'cat__sex_1' -> '성별=1'
+        'cat__sex_1' -> '성별=남성(1)'
     """
-    # 기본 형태: "num__age", "cat__sex_1"
     if raw_name.startswith("num__"):
         col = raw_name.replace("num__", "")
         return KOR_COL.get(col, col)
 
     if raw_name.startswith("cat__"):
         rest = raw_name.replace("cat__", "")
-        # rest may be like sex_1, cp_2, thal_3 ...
         parts = rest.split("_", 1)
         col = parts[0]
         val = parts[1] if len(parts) > 1 else ""
         base = KOR_COL.get(col, col)
-        return f"{base}={val}" if val != "" else base
 
-    # fallback
-    return KOR_COL.get(raw_name, raw_name)
+        if val == "":
+            return base
+
+        try:
+            v = int(val)
+        except Exception:
+            v = val
+
+        if isinstance(v, int) and col in CAT_VALUE_LABELS:
+            vlabel = CAT_VALUE_LABELS[col].get(v, f"{v}")
+            return f"{base}={vlabel}"
+
+        return f"{base}={val}"
+
+    return raw_name
 
 
 @st.cache_resource
@@ -171,7 +159,6 @@ def train_and_prepare(df: pd.DataFrame):
     y = df["target"].astype(int)
     X = df.drop(columns=["target"])
 
-    # 범주형/연속형 구분 (UCI 스타일)
     cat_cols = ["sex", "cp", "fbs", "restecg", "exang", "slope", "ca", "thal"]
     num_cols = [c for c in X.columns if c not in cat_cols]
 
@@ -187,10 +174,8 @@ def train_and_prepare(df: pd.DataFrame):
     pred_test = (proba_test >= 0.5).astype(int)
     acc = accuracy_score(y_test, pred_test)
 
-    # 전체 예측확률
     proba_all = pipe.predict_proba(X)[:, 1]
 
-    # Permutation importance (원본 컬럼 기준)
     perm = permutation_importance(
         pipe, X_test, y_test, n_repeats=20, random_state=42, scoring="roc_auc"
     )
@@ -203,10 +188,9 @@ def train_and_prepare(df: pd.DataFrame):
         }
     ).sort_values("importance_mean", ascending=False)
 
-    # 2D 임베딩
-    Xt = pipe.named_steps["preprocess"].fit_transform(X)
+    Xt_full = pipe.named_steps["preprocess"].fit_transform(X)
     svd = TruncatedSVD(n_components=2, random_state=42)
-    emb = svd.fit_transform(Xt)
+    emb = svd.fit_transform(Xt_full)
     emb_df = pd.DataFrame(emb, columns=["dim1", "dim2"])
     emb_df["target"] = y.values
     emb_df["proba"] = proba_all
@@ -214,14 +198,13 @@ def train_and_prepare(df: pd.DataFrame):
     pos_centroid = emb_df.loc[emb_df["target"] == 1, ["dim1", "dim2"]].mean().values
     neg_centroid = emb_df.loc[emb_df["target"] == 0, ["dim1", "dim2"]].mean().values
 
-    # SHAP (선형모델용)
     explainer = shap.LinearExplainer(
         pipe.named_steps["model"],
         pipe.named_steps["preprocess"].transform(X),
         feature_perturbation="interventional",
     )
 
-    artifacts = {
+    return {
         "pipe": pipe,
         "cat_cols": cat_cols,
         "num_cols": num_cols,
@@ -237,11 +220,17 @@ def train_and_prepare(df: pd.DataFrame):
         "y_full": y,
         "explainer": explainer,
     }
-    return artifacts
 
 
 def make_user_input_form(X: pd.DataFrame, cat_cols, num_cols) -> pd.DataFrame:
     st.sidebar.header("환자 특성 입력")
+
+    # ---- 강력 경고(강조) ----
+    st.sidebar.warning(
+        f"다음 항목은 일반인이 정확히 해석/입력하기 어려울 수 있습니다: **{HARD_VARS_KOR}**\n\n"
+        "해당 값은 검사 결과/의무기록 기반으로 입력하는 것이 바람직하며, "
+        "**불확실한 경우 반드시 주치의와 상의** 후 입력하세요."
+    )
 
     inputs = {}
 
@@ -254,71 +243,94 @@ def make_user_input_form(X: pd.DataFrame, cat_cols, num_cols) -> pd.DataFrame:
         maxv = float(col.max())
         step = (maxv - minv) / 200 if maxv > minv else 1.0
 
+        # ST 저하(oldpeak)는 특히 어려운 항목이므로 추가 캡션
+        if c == "oldpeak":
+            st.sidebar.caption("※ '운동 후 ST 저하'는 운동부하검사/심전도 판독에 기반합니다. 불확실하면 주치의와 상의하세요.")
+
         inputs[c] = st.sidebar.number_input(
-            label=f"{label}",
-            min_value=minv,
-            max_value=maxv,
-            value=default,
+            label=label,
+            min_value=float(minv),
+            max_value=float(maxv),
+            value=float(default),
             step=float(step) if step > 0 else 1.0,
         )
 
     st.sidebar.divider()
-    st.sidebar.caption("범주형 변수")
+    st.sidebar.caption("범주형 변수(코드 → 의미)")
+
+    # 범주형 중에서도 이해 난이도 높은 항목 안내
+    st.sidebar.info(
+        "참고: **휴식 심전도, ST 기울기, 조영된 주요 혈관 수, Thal 검사**는 "
+        "검사/영상 판독 결과에 기반하는 경우가 많습니다. 모르는 값은 주치의와 상의하세요."
+    )
+
     for c in cat_cols:
         label = KOR_COL.get(c, c)
-        options = sorted(X[c].unique().tolist())
+        observed_codes = sorted(pd.unique(X[c]).tolist())
+        mapper = CAT_VALUE_LABELS.get(c, {})
 
-        # 최빈값 기본 선택
+        display_options = []
+        code_by_display = {}
+        for code in observed_codes:
+            try:
+                code_int = int(code)
+            except Exception:
+                code_int = code
+
+            display = mapper.get(code_int, f"코드 {code_int}")
+            display_options.append(display)
+            code_by_display[display] = code_int
+
+        # 최빈값
         try:
-            default = X[c].value_counts().idxmax()
+            default_code = int(X[c].value_counts().idxmax())
         except Exception:
-            default = options[0]
+            default_code = observed_codes[0]
+            try:
+                default_code = int(default_code)
+            except Exception:
+                pass
 
-        # 설명(있으면)
-        if c in KOR_CAT_DESC:
-            st.sidebar.caption(f"{label}: {KOR_CAT_DESC[c]}")
+        default_display = mapper.get(default_code, f"코드 {default_code}")
+        if default_display not in display_options:
+            default_display = display_options[0]
 
-        inputs[c] = st.sidebar.selectbox(
-            label=f"{label}",
-            options=options,
-            index=options.index(default) if default in options else 0,
+        chosen_display = st.sidebar.selectbox(
+            label=label,
+            options=display_options,
+            index=display_options.index(default_display),
         )
 
-    user_df = pd.DataFrame([inputs])
-    return user_df
+        inputs[c] = code_by_display[chosen_display]
+
+    return pd.DataFrame([inputs])
 
 
 # -----------------------------
-# 메인 UI
+# 메인 화면
 # -----------------------------
-st.markdown(HEART_SVG, unsafe_allow_html=True)
+st.image("heart.png", use_container_width=True)
+st.title("심근경색 위험도 탐색기")
 
-csv_path = "Heart Attack Data Set.csv"
-df = load_data(csv_path)
+CSV_PATH = "Heart Attack Data Set.csv"
+df = load_data(CSV_PATH)
+st.caption(f"불러온 데이터: {CSV_PATH} | {df.shape[0]}행 × {df.shape[1]}열")
 
-st.caption(f"불러온 데이터: {csv_path} | {df.shape[0]}행 × {df.shape[1]}열")
-
-# 모델 학습 + 아티팩트 준비
 art = train_and_prepare(df)
 pipe = art["pipe"]
-cat_cols = art["cat_cols"]
-num_cols = art["num_cols"]
 
 # 사용자 입력
-user_df = make_user_input_form(df.drop(columns=["target"]), cat_cols, num_cols)
-
-# 예측
+user_df = make_user_input_form(df.drop(columns=["target"]), art["cat_cols"], art["num_cols"])
 user_prob = float(pipe.predict_proba(user_df)[:, 1][0])
 
-# 상단 2열 구성
+# 상단: 성능 + 예측/분포
 colA, colB = st.columns([1, 1])
 
 with colA:
-    st.subheader("모델 성능(참고용)")
+    st.subheader("모델 성능(참고)")
     m1, m2 = st.columns(2)
     m1.metric("ROC-AUC(테스트 분할)", f"{art['auc']:.3f}")
     m2.metric("정확도(테스트 분할)", f"{art['acc']:.3f}")
-    st.caption("간단한 기준 모델(로지스틱 회귀 + 표준화 + 원-핫 인코딩)입니다.")
 
     st.subheader("나의 예측 위험도 점수")
     st.plotly_chart(plot_probability_gauge(user_prob), use_container_width=True)
@@ -330,15 +342,15 @@ with colA:
 
     st.write(
         f"""
-**퍼센타일 위치(높을수록 고위험 쪽 꼬리에 가까움)**  
+**퍼센타일 위치(높을수록 고위험 쪽에 가까움)**  
 - 전체 환자 기준: **{p_all:.1f} 퍼센타일**  
-- 타깃=1(발생군) 기준: **{p_pos:.1f} 퍼센타일**  
-- 타깃=0(비발생군) 기준: **{p_neg:.1f} 퍼센타일**
+- 발생군(타깃=1) 기준: **{p_pos:.1f} 퍼센타일**  
+- 비발생군(타깃=0) 기준: **{p_neg:.1f} 퍼센타일**
 """
     )
 
 with colB:
-    st.subheader("전체 분포에서 나의 위치(위험도 분포)")
+    st.subheader("전체 분포에서 나의 위치")
     dist_df = pd.DataFrame(
         {"예측확률": all_probs, "타깃": art["y_full"].values.astype(int)}
     )
@@ -357,11 +369,12 @@ with colB:
     fig_hist.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20))
     st.plotly_chart(fig_hist, use_container_width=True)
 
+
 # -----------------------------
-# 전역 변수 중요도
+# 전역 변수 중요도 (Permutation)
 # -----------------------------
 st.divider()
-st.subheader("어떤 변수가 ‘발생(타깃=1)’에 크게 영향을 주는가? (Permutation Importance)")
+st.subheader("변수 중요도(전역) — Permutation Importance")
 
 imp = art["importances"].copy()
 imp = imp[imp["importance_mean"] > 0].head(12)
@@ -372,21 +385,18 @@ fig_imp = px.bar(
     y="feature_kor",
     orientation="h",
     error_x="importance_std",
-    title="상위 변수 중요도(변수를 섞었을 때 ROC-AUC 감소량 기준)",
     labels={"importance_mean": "중요도(평균)", "feature_kor": "변수"},
+    title="상위 중요 변수(변수를 섞었을 때 ROC-AUC 감소량 기준)",
 )
 fig_imp.update_layout(height=450, margin=dict(l=20, r=20, t=60, b=20))
 st.plotly_chart(fig_imp, use_container_width=True)
 
-st.caption(
-    "Permutation importance는 각 변수를 무작위로 섞었을 때 모델 성능이 얼마나 감소하는지를 측정합니다. 값이 클수록 해당 변수가 예측에 더 중요합니다."
-)
 
 # -----------------------------
-# 군집 근접도(직관적 위치)
+# 근접도 지도(2D)
 # -----------------------------
 st.divider()
-st.subheader("나는 고위험군(발생군)과 얼마나 가까운가? (2차원 근접도 지도)")
+st.subheader("고위험군(발생군)과의 근접도")
 
 Xt_user = pipe.named_steps["preprocess"].transform(user_df)
 user_emb = art["svd"].transform(Xt_user)[0]
@@ -399,7 +409,6 @@ neg_centroid = art["neg_centroid"]
 d_pos = float(np.linalg.norm(user_emb - pos_centroid))
 d_neg = float(np.linalg.norm(user_emb - neg_centroid))
 
-# 가까움 점수(0~100): 발생군 중심에 가까울수록 점수↑
 closeness = 100.0 * (d_neg / (d_pos + d_neg + 1e-9))
 closeness = float(np.clip(closeness, 0, 100))
 
@@ -414,10 +423,11 @@ fig_scatter = px.scatter(
     y="dim2",
     color="군",
     hover_data={"proba": ":.3f"},
-    title="모델 입력공간을 2차원으로 축소한 환자 분포(시각화 목적)",
-    opacity=0.65,
     labels={"dim1": "차원 1", "dim2": "차원 2"},
+    title="환자 분포(2D 투영) 및 나의 위치",
+    opacity=0.65,
 )
+
 fig_scatter.add_trace(
     go.Scatter(
         x=[pos_centroid[0]],
@@ -451,71 +461,95 @@ fig_scatter.add_trace(
 fig_scatter.update_layout(height=560, margin=dict(l=20, r=20, t=60, b=20))
 st.plotly_chart(fig_scatter, use_container_width=True)
 
-st.caption(
-    "이 지도는 해석 보조용 시각화입니다. 모델 입력공간(전처리된 특성)을 2차원으로 축소하여 '발생군/비발생군' 분포와 나의 위치를 직관적으로 보여줍니다."
-)
 
 # -----------------------------
-# SHAP 개인별 설명
+# SHAP 개인별 설명 (Plotly)
 # -----------------------------
 st.divider()
-st.subheader("왜 이런 점수가 나왔나? (개인별 SHAP 설명)")
+st.subheader("개인별 변수 기여도(SHAP)")
 
 explainer = art["explainer"]
-shap_values_user = explainer.shap_values(Xt_user)
+shap_values_user = explainer.shap_values(Xt_user)[0]
 
-# 전처리 후 feature name을 한글로 보기 좋게 변환
 raw_feature_names = pipe.named_steps["preprocess"].get_feature_names_out()
 feature_names_kor = [_pretty_kor_feature_name(n) for n in raw_feature_names]
 
-fig, ax = plt.subplots(figsize=(10, 5))
-shap.plots.waterfall(
-    shap.Explanation(
-        values=shap_values_user[0],
-        base_values=explainer.expected_value,
-        data=Xt_user[0],
-        feature_names=feature_names_kor,
-    ),
-    max_display=12,
-    show=False,
-)
-st.pyplot(fig)
-plt.close(fig)
+shap_user_df = pd.DataFrame({"변수": feature_names_kor, "기여도": shap_values_user})
+shap_user_df["절대기여도"] = shap_user_df["기여도"].abs()
 
-st.caption(
-    "빨간색은 예측 위험도를 올리는 방향, 파란색은 내리는 방향입니다. "
-    "기여도는 모델의 로짓(log-odds) 공간에서 계산됩니다."
+top_user = (
+    shap_user_df.sort_values("절대기여도", ascending=False)
+    .head(12)
+    .sort_values("기여도")
 )
+top_user["방향"] = np.where(top_user["기여도"] > 0, "위험 증가", "위험 감소")
+
+fig_shap_user = px.bar(
+    top_user,
+    x="기여도",
+    y="변수",
+    orientation="h",
+    color="방향",
+    title="나의 예측 위험도에 대한 변수 기여도(SHAP)",
+    hover_data={"기여도": ":.3f", "방향": True},
+)
+fig_shap_user.add_vline(x=0, line_width=2, line_dash="dash")
+fig_shap_user.update_layout(
+    height=520,
+    xaxis_title="기여도 (log-odds 기준)",
+    yaxis_title="",
+    margin=dict(l=20, r=20, t=60, b=20),
+)
+st.plotly_chart(fig_shap_user, use_container_width=True)
+
 
 # -----------------------------
-# SHAP 전역 영향(보완)
+# SHAP 전역 중요도 (Plotly)
 # -----------------------------
-st.subheader("전반적으로 중요한 변수는? (SHAP 전역 영향)")
+st.subheader("전역 변수 영향(SHAP)")
+
 X_sample = art["X_full"].sample(n=min(200, len(art["X_full"])), random_state=42)
 X_sample_proc = pipe.named_steps["preprocess"].transform(X_sample)
 shap_values_sample = explainer.shap_values(X_sample_proc)
 
-fig2, ax2 = plt.subplots(figsize=(10, 5))
-shap.plots.bar(
-    shap.Explanation(
-        values=shap_values_sample,
-        base_values=explainer.expected_value,
-        data=X_sample_proc,
-        feature_names=feature_names_kor,
-    ),
-    max_display=12,
-    show=False,
+global_importance = (
+    pd.DataFrame(np.abs(shap_values_sample), columns=feature_names_kor)
+    .mean()
+    .sort_values(ascending=False)
+    .head(12)
+    .reset_index()
 )
-st.pyplot(fig2)
-plt.close(fig2)
+global_importance.columns = ["변수", "평균 절대 기여도"]
 
-st.caption("SHAP 전역 영향은 변수의 평균적 기여 크기를 요약합니다(방향성/기여도 해석에 유용).")
+fig_shap_global = px.bar(
+    global_importance.sort_values("평균 절대 기여도"),
+    x="평균 절대 기여도",
+    y="변수",
+    orientation="h",
+    title="전체 환자 기준 SHAP 전역 중요도(평균 절대 기여도)",
+)
+fig_shap_global.update_layout(
+    height=450,
+    xaxis_title="평균 절대 기여도",
+    yaxis_title="",
+    margin=dict(l=20, r=20, t=60, b=20),
+)
+st.plotly_chart(fig_shap_global, use_container_width=True)
+
+
+# -----------------------------
+# (선택) 범주형 코드 확인
+# -----------------------------
+with st.expander("범주형 변수 코드 확인(데이터에 실제 존재하는 값)"):
+    X0 = df.drop(columns=["target"])
+    for c in art["cat_cols"]:
+        st.write(f"- **{KOR_COL.get(c, c)} ({c})**: {sorted(pd.unique(X0[c]).tolist())}")
+
 
 # -----------------------------
 # 데이터 미리보기
 # -----------------------------
 with st.expander("데이터 미리보기(상위 20행)"):
-    # 컬럼명 표시를 한글로 바꿔서 보여주되, 실제 연산은 영문 컬럼명 사용
     preview = df.copy()
     preview.columns = [KOR_COL.get(c, c) for c in preview.columns]
     st.dataframe(preview.head(20), use_container_width=True)
